@@ -16,6 +16,12 @@ describe("tool request schemas", () => {
     });
   });
 
+  it("drops an unrecognized kind instead of failing", () => {
+    expect(GetExercisesRequestSchema.parse({ muscleGroup: "shoulders", kind: "necessary" })).toEqual({
+      muscleGroup: "shoulders",
+    });
+  });
+
   it("accepts snake_case exercise_ids", () => {
     const parsed = BuildSplitRequestSchema.parse({ primary: "legs", secondary: "shoulders", exercise_ids: "a, b" });
     expect(parsed.exerciseIds).toEqual(["a", "b"]);

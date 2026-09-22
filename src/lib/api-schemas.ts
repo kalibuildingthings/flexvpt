@@ -28,7 +28,8 @@ function aliasExerciseIds(body: unknown): unknown {
 /** POST /api/tools/exercises (agent webhook) */
 export const GetExercisesRequestSchema = z.object({
   muscleGroup: MuscleGroupInput,
-  kind: ExerciseKindInput.optional(),
+  // An unrecognized kind (e.g. "necessary") just means "no filter" rather than a failed call.
+  kind: ExerciseKindInput.optional().catch(undefined),
 });
 
 /** POST /api/tools/split (agent webhook) and the `show_split` client tool */
