@@ -19,10 +19,17 @@ function VoiceControls({ onSplit }: VoiceAgentProps) {
   const { startSession, endSession } = useConversationControls();
   const { status, message } = useConversationStatus();
   const [startError, setStartError] = useState<string | null>(null);
+  const [toolError, setToolError] = useState<string | null>(null);
 
   useConversationClientTool("show_split", (params: Record<string, unknown>) => {
     const result = handleShowSplit(params);
-    if (result.ok) onSplit(result.split);
+    console.info("[show_split]", params, "->", result.reply);
+    if (result.ok) {
+      setToolError(null);
+      onSplit(result.split);
+    } else {
+      setToolError(`show_split rejected: ${result.reply}`);
+    }
     return result.reply;
   });
 
@@ -37,7 +44,7 @@ function VoiceControls({ onSplit }: VoiceAgentProps) {
   }
 
   const live = status === "connected";
-  const error = startError ?? (status === "error" ? (message ?? "Connection error") : null);
+  const error = startError ?? toolError ?? (status === "error" ? (message ?? "Connection error") : null);
 
   return (
     <div className="flex flex-col items-center gap-3">
@@ -59,7 +66,11 @@ function VoiceControls({ onSplit }: VoiceAgentProps) {
 
 export function VoiceAgent({ onSplit }: VoiceAgentProps) {
   return (
-    <ConversationProvider>
+    <ConversationProvider
+      onUnhandledClientToolCall={(call) =>
+        console.warn(`[agent] called client tool "${call.tool_name}", but only "show_split" is registered`)
+      }
+    >
       <VoiceControls onSplit={onSplit} />
     </ConversationProvider>
   );
