@@ -1,7 +1,9 @@
 /**
  * One-off: renders each exercise's form cues to public/audio/<id>.mp3 via ElevenLabs TTS.
- * Usage: ELEVENLABS_API_KEY=... [ELEVENLABS_VOICE_ID=...] npm run voiceovers
+ * Reads ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID from .env.local (or the shell).
+ * Usage: npm run voiceovers
  */
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { EXERCISES } from "../src/lib/exercises";
@@ -10,6 +12,7 @@ import { voiceoverPath, voiceoverScript } from "../src/lib/voiceover";
 const DEFAULT_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb"; // "George", a stock ElevenLabs voice
 
 async function main(): Promise<void> {
+  if (existsSync(".env.local")) process.loadEnvFile(".env.local");
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) throw new Error("ELEVENLABS_API_KEY is required");
   const voiceId = process.env.ELEVENLABS_VOICE_ID ?? DEFAULT_VOICE_ID;
