@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Exercise } from "@/lib/domain";
+import { ExerciseMotion } from "./exercise-motion";
 import { MuscleDiagram } from "./muscle-diagram";
 import { VoiceoverButton } from "./voiceover-button";
 
@@ -20,6 +21,7 @@ export function ExerciseCard({ exercise }: { exercise: Exercise }) {
         </p>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        <ExerciseMotion exercise={exercise} />
         <MuscleDiagram targets={exercise.targets} />
         <ul className="list-disc space-y-1 pl-5 text-sm">
           {exercise.formCues.map((cue) => (
