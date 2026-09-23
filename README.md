@@ -68,6 +68,10 @@ src/components/        VoiceAgent, SplitView, ExerciseCard, MuscleDiagram, SaveT
 src/components/ui/     shadcn/ui primitives
 ```
 
+## Credits
+
+Exercise photos in `public/exercises/` come from [free-exercise-db](https://github.com/yuhonas/free-exercise-db) (public domain, Unlicense).
+
 ## Scope
 
 Demo library: 3 leg compounds and 5 shoulder accessories, so the agent has something to repick from.

@@ -78,3 +78,34 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Card animations. Both are disabled under prefers-reduced-motion via the motion-safe: variant. */
+@theme {
+  --animate-muscle-pulse: muscle-pulse 1.6s ease-in-out infinite;
+  --animate-frame-flip: frame-flip 1.8s ease-in-out infinite;
+
+  @keyframes muscle-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.45;
+    }
+  }
+
+  /* Cross-fades the top frame in and out: start position -> end position -> start. */
+  @keyframes frame-flip {
+    0%,
+    35% {
+      opacity: 0;
+    }
+    50%,
+    85% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+}

@@ -80,7 +80,7 @@ function Figure({ view, targets }: { view: View; targets: ReadonlySet<TargetMusc
         {regions.map((region) => (
           <g
             key={region.muscle}
-            className={cn(targets.has(region.muscle) ? "fill-highlight" : "fill-muted-foreground/15")}
+            className={cn(targets.has(region.muscle) ? "fill-highlight motion-safe:animate-muscle-pulse" : "fill-muted-foreground/15")}
           >
             {region.shape}
           </g>
