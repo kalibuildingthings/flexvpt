@@ -1,0 +1,61 @@
+{
+  "_comment": "Replace YOUR_HOST with the public URL of the app and set the secret to TOOL_WEBHOOK_SECRET.",
+  "tools": [
+    {
+      "type": "webhook",
+      "name": "get_exercises",
+      "description": "List the exercises available for one muscle group, optionally filtered by kind. Use the returned ids when picking.",
+      "api_schema": {
+        "url": "https://YOUR_HOST/api/tools/exercises",
+        "method": "POST",
+        "request_headers": { "x-flexvpt-secret": "<TOOL_WEBHOOK_SECRET>" },
+        "request_body_schema": {
+          "type": "object",
+          "properties": {
+            "muscleGroup": { "type": "string", "enum": ["legs", "shoulders"], "description": "Muscle group to list." },
+            "kind": { "type": "string", "enum": ["compound", "accessory"], "description": "Optional exercise kind filter." }
+          },
+          "required": ["muscleGroup"]
+        }
+      }
+    },
+    {
+      "type": "webhook",
+      "name": "build_split",
+      "description": "Validate picks against the rule (2 primary compounds + 4 secondary accessories). Returns the split, or 422 with an issues array describing what to repick.",
+      "api_schema": {
+        "url": "https://YOUR_HOST/api/tools/split",
+        "method": "POST",
+        "request_headers": { "x-flexvpt-secret": "<TOOL_WEBHOOK_SECRET>" },
+        "request_body_schema": {
+          "type": "object",
+          "properties": {
+            "primary": { "type": "string", "enum": ["legs", "shoulders"], "description": "The bigger muscle group." },
+            "secondary": { "type": "string", "enum": ["legs", "shoulders"], "description": "The smaller muscle group." },
+            "exerciseIds": {
+              "type": "array",
+              "items": { "type": "string", "description": "Exercise id from get_exercises." },
+              "description": "Exactly 6 ids: 2 primary compounds and 4 secondary accessories."
+            }
+          },
+          "required": ["primary", "secondary", "exerciseIds"]
+        }
+      }
+    },
+    {
+      "type": "client",
+      "name": "show_split",
+      "description": "Render the validated split as exercise cards in the user's browser. Call only after build_split succeeds, with the same arguments.",
+      "expects_response": true,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "primary": { "type": "string", "enum": ["legs", "shoulders"] },
+          "secondary": { "type": "string", "enum": ["legs", "shoulders"] },
+          "exerciseIds": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["primary", "secondary", "exerciseIds"]
+      }
+    }
+  ]
+}
