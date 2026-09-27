@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSplit } from "@/lib/split";
-import { jsonRequest } from "../../route-helpers.test-utils";
+import { CLIENT_KEY, clientHeaders, jsonRequest, uniqueIp } from "../../route-helpers.test-utils";
 
 const query = vi.fn();
 const create = vi.fn();
@@ -23,12 +23,13 @@ function split() {
 describe("POST /api/split/save", () => {
   beforeEach(() => {
     vi.stubEnv("NOTION_DATA_SOURCE_ID", "ds-1");
+    vi.stubEnv("NEXT_PUBLIC_CLIENT_API_KEY", CLIENT_KEY);
     query.mockReset().mockResolvedValue({ results: [] });
     create.mockReset().mockImplementation(async () => ({ id: `page-${create.mock.calls.length}` }));
   });
 
   it("saves the split and returns page ids", async () => {
-    const res = await POST(jsonRequest("/api/split/save", { split: split() }));
+    const res = await POST(jsonRequest("/api/split/save", { split: split() }, clientHeaders()));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       notionPageIds: ["page-1", "page-2", "page-3", "page-4", "page-5", "page-6"],
@@ -38,14 +39,14 @@ describe("POST /api/split/save", () => {
 
   it("returns existing rows on retry instead of duplicating", async () => {
     query.mockResolvedValue({ results: [{ id: "old-1" }] });
-    const res = await POST(jsonRequest("/api/split/save", { split: split() }));
+    const res = await POST(jsonRequest("/api/split/save", { split: split() }, clientHeaders()));
     expect(await res.json()).toEqual({ notionPageIds: ["old-1"], alreadySaved: true });
     expect(create).not.toHaveBeenCalled();
   });
 
   it("422s on a tampered split that breaks the rule", async () => {
     const tampered = { ...split(), exercises: split().exercises.slice(0, 3) };
-    const res = await POST(jsonRequest("/api/split/save", { split: tampered }));
+    const res = await POST(jsonRequest("/api/split/save", { split: tampered }, clientHeaders()));
     expect(res.status).toBe(422);
     expect(query).not.toHaveBeenCalled();
   });
@@ -53,7 +54,23 @@ describe("POST /api/split/save", () => {
   it("502s when Notion fails", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     query.mockRejectedValue(new Error("boom"));
-    const res = await POST(jsonRequest("/api/split/save", { split: split() }));
+    const res = await POST(jsonRequest("/api/split/save", { split: split() }, clientHeaders()));
     expect(res.status).toBe(502);
+  });
+
+  it("401s without the client key and never touches Notion", async () => {
+    const res = await POST(jsonRequest("/api/split/save", { split: split() }, { "x-forwarded-for": uniqueIp() }));
+    expect(res.status).toBe(401);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("429s after too many saves from one IP", async () => {
+    const ip = uniqueIp();
+    const statuses: number[] = [];
+    for (let i = 0; i < 11; i++) {
+      statuses.push((await POST(jsonRequest("/api/split/save", { split: split() }, clientHeaders(ip)))).status);
+    }
+    expect(statuses.slice(0, 10).every((s) => s === 200)).toBe(true);
+    expect(statuses[10]).toBe(429);
   });
 });

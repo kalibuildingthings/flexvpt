@@ -53,7 +53,11 @@ user clicks "Save to Notion" ─────────▶ POST /api/split/save
 | `POST /api/split/save` | browser | `{ split }` | `{ notionPageIds[], alreadySaved }` |
 | `GET /api/agent/signed-url` | browser | – | `{ signedUrl }` |
 
-Agent webhooks require the `x-flexvpt-secret` header. All bodies are validated with Zod, and a bad body gets a
+Agent webhooks require the `x-flexvpt-secret` header. The browser routes (`signed-url`, `split/save`)
+require `x-flexvpt-client-key` and are rate limited per IP (5 and 10 requests/minute, in memory).
+
+**Client key.** `NEXT_PUBLIC_CLIENT_API_KEY` is shipped to the browser, so anyone who loads the page can
+read it. It stops drive-by and cross-site callers; it is not user authentication (the MVP has no accounts). All bodies are validated with Zod, and a bad body gets a
 `400 { error, issues[] }`. The save route rebuilds the split from its exercise ids on the server, so a
 tampered client payload can't write invalid rows.
 

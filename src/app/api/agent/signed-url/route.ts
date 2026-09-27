@@ -1,10 +1,14 @@
+import { guardSignedUrlRequest } from "@/lib/client-route-limits";
 import { getEnv } from "@/lib/env";
 import { errorResponse } from "@/lib/http";
 
 const SIGNED_URL_ENDPOINT = "https://api.elevenlabs.io/v1/convai/conversation/get-signed-url";
 
 /** Keeps the ElevenLabs API key server-side; the browser starts the session with this URL. */
-export async function GET(): Promise<Response> {
+export async function GET(request: Request): Promise<Response> {
+  const denied = guardSignedUrlRequest(request);
+  if (denied) return denied;
+
   const url = `${SIGNED_URL_ENDPOINT}?agent_id=${encodeURIComponent(getEnv("ELEVENLABS_AGENT_ID"))}`;
   const upstream = await fetch(url, {
     headers: { "xi-api-key": getEnv("ELEVENLABS_API_KEY") },

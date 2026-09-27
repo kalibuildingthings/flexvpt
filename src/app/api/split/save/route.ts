@@ -1,4 +1,5 @@
 import { SaveSplitRequestSchema, type SaveSplitResponse } from "@/lib/api-schemas";
+import { guardSaveRequest } from "@/lib/client-route-limits";
 import { getEnv } from "@/lib/env";
 import { errorResponse, parseJsonBody } from "@/lib/http";
 import { createNotionClient } from "@/lib/notion-client";
@@ -7,6 +8,9 @@ import { buildSplit } from "@/lib/split";
 
 /** Browser "Save to Notion" button. Re-derives the split server-side so only rule-valid data is written. */
 export async function POST(request: Request): Promise<Response> {
+  const denied = guardSaveRequest(request);
+  if (denied) return denied;
+
   const parsed = await parseJsonBody(request, SaveSplitRequestSchema);
   if (!parsed.ok) return parsed.response;
 

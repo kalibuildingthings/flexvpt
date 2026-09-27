@@ -5,6 +5,8 @@ const EnvSchema = z.object({
   ELEVENLABS_API_KEY: z.string().min(1),
   ELEVENLABS_AGENT_ID: z.string().min(1),
   TOOL_WEBHOOK_SECRET: z.string().min(16),
+  /** Sent by the browser on client-facing routes. NEXT_PUBLIC_ so the client bundle can read it. */
+  NEXT_PUBLIC_CLIENT_API_KEY: z.string().min(16),
   NOTION_TOKEN: z.string().min(1),
   NOTION_DATA_SOURCE_ID: z.string().min(1),
 });

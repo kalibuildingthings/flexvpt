@@ -1,9 +1,11 @@
 import "server-only";
 import { timingSafeEqual } from "node:crypto";
 import type { z } from "zod";
-import { getEnv } from "./env";
+import { getEnv, type Env } from "./env";
+import { clientIp, type RateLimiter } from "./rate-limit";
 
 export const TOOL_SECRET_HEADER = "x-flexvpt-secret";
+export const CLIENT_KEY_HEADER = "x-flexvpt-client-key";
 
 export type ParseResult<T> = { ok: true; data: T } | { ok: false; response: Response };
 
@@ -29,9 +31,44 @@ export async function parseJsonBody<S extends z.ZodType>(
   return { ok: true, data: result.data };
 }
 
+function secretMatches(provided: string | null, expected: string): boolean {
+  const a = Buffer.from(provided ?? "");
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+type GuardOptions = {
+  header: string;
+  secretEnv: keyof Pick<Env, "TOOL_WEBHOOK_SECRET" | "NEXT_PUBLIC_CLIENT_API_KEY">;
+  limiter?: RateLimiter;
+};
+
+/**
+ * Rate limit (per IP), then require a shared-secret header whose value comes from env.
+ * Returns an error response to send, or null when the request may proceed.
+ */
+export function guardRequest(request: Request, { header, secretEnv, limiter }: GuardOptions): Response | null {
+  if (limiter) {
+    const limited = limiter.check(clientIp(request));
+    if (!limited.ok) {
+      return Response.json(
+        { error: "rate_limited", issues: [] },
+        { status: 429, headers: { "retry-after": String(limited.retryAfterSeconds) } },
+      );
+    }
+  }
+
+  let expected: string;
+  try {
+    expected = getEnv(secretEnv);
+  } catch (error) {
+    console.error(error);
+    return errorResponse(500, "server_misconfigured");
+  }
+  return secretMatches(request.headers.get(header), expected) ? null : errorResponse(401, "unauthorized");
+}
+
 /** Agent webhooks carry a shared secret header configured on the ElevenLabs tool. */
-export function isAuthorizedTool(request: Request): boolean {
-  const provided = Buffer.from(request.headers.get(TOOL_SECRET_HEADER) ?? "");
-  const expected = Buffer.from(getEnv("TOOL_WEBHOOK_SECRET"));
-  return provided.length === expected.length && timingSafeEqual(provided, expected);
+export function guardToolRequest(request: Request): Response | null {
+  return guardRequest(request, { header: TOOL_SECRET_HEADER, secretEnv: "TOOL_WEBHOOK_SECRET" });
 }
