@@ -22,8 +22,17 @@ describe("buildSplit", () => {
     ]);
   });
 
-  it("gives the same id regardless of pick order", () => {
-    expect(splitIdFor("legs", "shoulders", ["b", "a"])).toBe(splitIdFor("legs", "shoulders", ["a", "b"]));
+  it("derives the split id from a hash of the exercise ids, independent of pick order", () => {
+    const a = splitIdFor(["back-squat", "face-pull"]);
+    expect(a).toMatch(/^split_[0-9a-f]{16}$/);
+    expect(splitIdFor(["face-pull", "back-squat"])).toBe(a);
+    expect(splitIdFor(["back-squat", "front-raise"])).not.toBe(a);
+  });
+
+  it("puts that hashed id on the built split", () => {
+    const result = buildSplit(VALID);
+    if (!result.ok) throw new Error("fixture invalid");
+    expect(result.split.id).toBe(splitIdFor(VALID.exerciseIds));
   });
 
   it("reports wrong counts so the agent can repick", () => {

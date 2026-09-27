@@ -34,13 +34,20 @@ describe("POST /api/split/save", () => {
     expect(await res.json()).toEqual({
       notionPageIds: ["page-1", "page-2", "page-3", "page-4", "page-5", "page-6"],
       alreadySaved: false,
+      createdCount: 6,
     });
   });
 
   it("returns existing rows on retry instead of duplicating", async () => {
-    query.mockResolvedValue({ results: [{ id: "old-1" }] });
+    query.mockResolvedValue({
+      results: split().exercises.map((e, i) => ({ id: `old-${i}`, properties: { Name: { title: [{ plain_text: e.name }] } } })),
+    });
     const res = await POST(jsonRequest("/api/split/save", { split: split() }, clientHeaders()));
-    expect(await res.json()).toEqual({ notionPageIds: ["old-1"], alreadySaved: true });
+    expect(await res.json()).toEqual({
+      notionPageIds: ["old-0", "old-1", "old-2", "old-3", "old-4", "old-5"],
+      alreadySaved: true,
+      createdCount: 0,
+    });
     expect(create).not.toHaveBeenCalled();
   });
 

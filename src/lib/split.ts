@@ -9,9 +9,22 @@ export type BuildSplitInput = {
 
 export type BuildSplitResult = { ok: true; split: Split } | { ok: false; issues: string[] };
 
-/** Deterministic id: the same picks always produce the same split id (used to dedupe Notion saves). */
-export function splitIdFor(primary: MuscleGroup, secondary: MuscleGroup, exerciseIds: readonly string[]): string {
-  return `${primary}+${secondary}:${[...exerciseIds].sort().join(",")}`;
+const FNV_OFFSET = BigInt("0xcbf29ce484222325");
+const FNV_PRIME = BigInt("0x100000001b3");
+const MASK_64 = BigInt("0xffffffffffffffff");
+
+/** FNV-1a 64-bit. Synchronous and isomorphic, since the browser also builds splits (show_split). */
+function fnv1a64(input: string): string {
+  let hash = FNV_OFFSET;
+  for (const byte of new TextEncoder().encode(input)) {
+    hash = ((hash ^ BigInt(byte)) * FNV_PRIME) & MASK_64;
+  }
+  return hash.toString(16).padStart(16, "0");
+}
+
+/** Deterministic id: a hash of the sorted exercise ids, so the same picks always map to the same Notion rows. */
+export function splitIdFor(exerciseIds: readonly string[]): string {
+  return `split_${fnv1a64([...exerciseIds].sort().join(","))}`;
 }
 
 function capitalize(value: string): string {
@@ -74,7 +87,7 @@ export function buildSplit({ primary, secondary, exerciseIds }: BuildSplitInput)
   return {
     ok: true,
     split: {
-      id: splitIdFor(primary, secondary, exerciseIds),
+      id: splitIdFor(exerciseIds),
       title: `${capitalize(primary)} & ${capitalize(secondary)}`,
       primary,
       secondary,
