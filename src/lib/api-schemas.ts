@@ -49,5 +49,6 @@ export const SaveSplitRequestSchema = z.object({ split: SplitSchema });
 export const SaveSplitResponseSchema = z.object({
   notionPageIds: z.array(z.string()),
   alreadySaved: z.boolean(),
+  createdCount: z.number().int().nonnegative(),
 });
 export type SaveSplitResponse = z.infer<typeof SaveSplitResponseSchema>;
