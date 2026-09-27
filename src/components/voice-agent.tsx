@@ -11,6 +11,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { requestSignedUrl } from "@/lib/api-client";
 import type { Split } from "@/lib/domain";
+import { createSessionStarter } from "@/lib/session-starter";
 import { handleShowSplit } from "@/lib/show-split";
 
 type VoiceAgentProps = { onSplit: (split: Split) => void };
@@ -19,6 +20,8 @@ function VoiceControls({ onSplit }: VoiceAgentProps) {
   const { startSession, endSession } = useConversationControls();
   const { status, message } = useConversationStatus();
   const [startError, setStartError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [starter] = useState(() => createSessionStarter({ getSignedUrl: requestSignedUrl, startSession }));
   const [toolError, setToolError] = useState<string | null>(null);
 
   useConversationClientTool("show_split", (params: Record<string, unknown>) => {
@@ -33,14 +36,15 @@ function VoiceControls({ onSplit }: VoiceAgentProps) {
     return result.reply;
   });
 
+  // The SDK asks for the microphone itself, so there is no separate getUserMedia call.
   async function start() {
+    if (starter.isStarting()) return;
     setStartError(null);
-    try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
-      startSession({ signedUrl: await requestSignedUrl(), connectionType: "websocket" });
-    } catch (error) {
-      setStartError(error instanceof Error ? error.message : "Could not start");
-    }
+    setStarting(true);
+    const outcome = await starter.start();
+    if (outcome.status === "busy") return;
+    setStarting(false);
+    if (outcome.status === "failed") setStartError(outcome.message);
   }
 
   const live = status === "connected";
@@ -48,8 +52,8 @@ function VoiceControls({ onSplit }: VoiceAgentProps) {
 
   return (
     <div className="flex flex-col items-center gap-3">
-      <Button size="lg" onClick={live ? endSession : start} disabled={status === "connecting"}>
-        {status === "connecting" ? <Loader2 className="animate-spin" /> : live ? <MicOff /> : <Mic />}
+      <Button size="lg" onClick={live ? endSession : start} disabled={starting || status === "connecting"}>
+        {starting || status === "connecting" ? <Loader2 className="animate-spin" /> : live ? <MicOff /> : <Mic />}
         {live ? "End session" : "Talk to your trainer"}
       </Button>
       <p className="text-sm text-muted-foreground">
