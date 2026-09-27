@@ -13,11 +13,21 @@ describe("handleShowSplit", () => {
   });
 
   it("returns a rule_violation reply the agent can act on", () => {
-    const result = handleShowSplit({ primary: "legs", secondary: "shoulders", exerciseIds: ["back-squat"] });
+    const result = handleShowSplit({
+      primary: "legs",
+      secondary: "shoulders",
+      exerciseIds: ["back-squat", "romanian-deadlift", "bulgarian-split-squat", "lateral-raise", "face-pull", "front-raise"],
+    });
     expect(result).toEqual({
       ok: false,
-      reply: "rule_violation: expected 2 legs compounds, got 1; expected 4 shoulders accessories, got 0",
+      reply: "rule_violation: expected 2 legs compounds, got 3; expected 4 shoulders accessories, got 3",
     });
+  });
+
+  it("rejects the wrong number of ids as invalid parameters", () => {
+    const result = handleShowSplit({ primary: "legs", secondary: "shoulders", exerciseIds: ["back-squat"] });
+    expect(result.ok).toBe(false);
+    expect(result.reply).toMatch(/^invalid parameters/);
   });
 
   it("rejects malformed params", () => {
