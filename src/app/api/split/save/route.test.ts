@@ -80,4 +80,10 @@ describe("POST /api/split/save", () => {
     expect(statuses.slice(0, 10).every((s) => s === 200)).toBe(true);
     expect(statuses[10]).toBe(429);
   });
+
+  it("413s on an oversized body without reading Notion", async () => {
+    const res = await POST(jsonRequest("/api/split/save", { split: split(), padding: "x".repeat(40_000) }, clientHeaders()));
+    expect(res.status).toBe(413);
+    expect(query).not.toHaveBeenCalled();
+  });
 });

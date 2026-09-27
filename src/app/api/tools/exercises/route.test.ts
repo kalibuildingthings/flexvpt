@@ -29,4 +29,9 @@ describe("POST /api/tools/exercises", () => {
     const res = await POST(jsonRequest("/api/tools/exercises", "{nope", auth));
     expect(await res.json()).toEqual({ error: "invalid_json", issues: [] });
   });
+
+  it("400s on an unrecognized kind", async () => {
+    const res = await POST(jsonRequest("/api/tools/exercises", { muscleGroup: "legs", kind: "necessary" }, auth));
+    expect(res.status).toBe(400);
+  });
 });

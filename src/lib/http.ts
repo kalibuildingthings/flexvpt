@@ -13,14 +13,49 @@ export function errorResponse(status: number, error: string, issues: string[] = 
   return Response.json({ error, issues }, { status });
 }
 
+/** Largest JSON body any route accepts. A full split with form cues is ~3 KB. */
+export const DEFAULT_MAX_BODY_BYTES = 16 * 1024;
+
+class PayloadTooLargeError extends Error {}
+
+/** Reads the body as text, aborting as soon as it passes maxBytes (content-length can be absent or wrong). */
+async function readBodyText(request: Request, maxBytes: number): Promise<string> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) throw new PayloadTooLargeError();
+  if (!request.body) return "";
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new PayloadTooLargeError();
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 export async function parseJsonBody<S extends z.ZodType>(
   request: Request,
   schema: S,
+  { maxBytes = DEFAULT_MAX_BODY_BYTES }: { maxBytes?: number } = {},
 ): Promise<ParseResult<z.infer<S>>> {
   let body: unknown;
   try {
-    body = await request.json();
-  } catch {
+    body = JSON.parse(await readBodyText(request, maxBytes));
+  } catch (error) {
+    if (error instanceof PayloadTooLargeError) return { ok: false, response: errorResponse(413, "payload_too_large") };
     return { ok: false, response: errorResponse(400, "invalid_json") };
   }
   const result = schema.safeParse(body);
