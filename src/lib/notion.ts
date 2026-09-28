@@ -123,6 +123,31 @@ function exerciseRow(dataSourceId: string, splitId: string, exercise: Exercise):
 }
 
 /**
+ * Saves of the same split on this server run one at a time, so the second sees the first's rows
+ * instead of racing it. Entries are removed when their save settles, so the map stays small.
+ *
+ * Per-process only: two server instances can still race. Notion has no transactions or unique
+ * constraints, so that can't be closed here; a real database with a unique (split_id, exercise_id)
+ * constraint would (see README).
+ */
+const savesInFlight = new Map<string, Promise<void>>();
+
+async function withSplitLock<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const previous = savesInFlight.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((resolve) => (release = resolve));
+  const tail = previous.then(() => mine);
+  savesInFlight.set(key, tail);
+  try {
+    await previous;
+    return await run();
+  } finally {
+    release();
+    if (savesInFlight.get(key) === tail) savesInFlight.delete(key);
+  }
+}
+
+/**
  * Check-then-create per exercise, keyed by (split id, exercise id).
  * A retry after a partial failure creates only the missing rows, and success is reported only
  * once every exercise has a Notion page id confirmed by Notion itself.
@@ -132,6 +157,10 @@ export async function saveSplitToNotion(
   dataSourceId: string,
   split: Split,
 ): Promise<SaveSplitResult> {
+  return withSplitLock(`${dataSourceId}:${split.id}`, () => saveUnlocked(client, dataSourceId, split));
+}
+
+async function saveUnlocked(client: NotionClient, dataSourceId: string, split: Split): Promise<SaveSplitResult> {
   await assertCompatibleSchema(client, dataSourceId);
   const existing = await existingRowsByExerciseId(client, dataSourceId, split.id);
 
