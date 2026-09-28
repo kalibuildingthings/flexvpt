@@ -14,7 +14,8 @@ export type StartOutcome = { status: "connected" } | { status: "busy" } | { stat
 /**
  * idle → starting → active → stopping → idle
  *            └─ timeout / error ─┘  │
- *                                   └─ no confirmation in time → stuck ─ confirmation / forceEnd() → idle
+ *                                   └─ no confirmation in time → stuck ─ confirmation → idle
+ *                                                                   └─ forceEnd() → page reload
  * No timer ever releases the lock: "stuck" is still locked and only asks the user to force end.
  */
 export type StarterPhase = "idle" | "starting" | "active" | "stopping" | "stuck";
@@ -28,20 +29,21 @@ type Deps = {
   timeoutMs?: number;
   /** How long "stopping" may wait for teardown confirmation before going "stuck". */
   teardownTimeoutMs?: number;
+  /** Used by forceEnd. A fresh page guarantees no old session or transport survives. */
+  reload?: () => void;
   onPhaseChange?: (phase: StarterPhase) => void;
 };
 
 export type SessionStarter = {
   start(): Promise<StartOutcome>;
   stop(): void;
-  /** Only when "stuck": best-effort hard teardown, then release the lock. */
+  /** Only when "stuck": best-effort endSession, then reload the page. Never unlocks in place. */
   forceEnd(): void;
   phase(): StarterPhase;
 };
 
 export const TIMEOUT_MESSAGE = "Timed out connecting to the trainer";
 export const CLOSED_MESSAGE = "Connection closed before the trainer was ready";
-export const FORCE_ENDED_MESSAGE = "Session was force-ended";
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -55,7 +57,7 @@ function messageOf(error: unknown): string {
  * or status "disconnected" for a failed start). After a timeout, error or stop(), the session is
  * ended and the starter stays "stopping" until that confirmation arrives, so a retry can never
  * overlap a session that may still connect. If no confirmation arrives within teardownTimeoutMs the
- * starter goes "stuck" (still locked) and only an explicit forceEnd() releases it.
+ * starter goes "stuck" (still locked); forceEnd() then reloads the page rather than unlocking in place.
  */
 export function createSessionStarter({
   getSignedUrl,
@@ -63,13 +65,12 @@ export function createSessionStarter({
   endSession,
   timeoutMs = 15_000,
   teardownTimeoutMs = 15_000,
+  reload = () => window.location.reload(),
   onPhaseChange,
 }: Deps): SessionStarter {
   let phase: StarterPhase = "idle";
   /** Ends the attempt that holds the lock, if any. */
   let stopCurrent: (() => void) | undefined;
-  /** Abandons the attempt that holds the lock, if any. */
-  let forceCurrent: (() => void) | undefined;
 
   /** endSession can throw if the socket is already gone; teardown is still confirmed via callbacks. */
   function tryEndSession() {
@@ -88,7 +89,6 @@ export function createSessionStarter({
 
   function release() {
     stopCurrent = undefined;
-    forceCurrent = undefined;
     setPhase("idle");
   }
 
@@ -101,17 +101,12 @@ export function createSessionStarter({
       let done = false;
       let teardownTimer: ReturnType<typeof setTimeout> | undefined;
 
-      const finish = (outcome: StartOutcome) => {
-        done = true;
-        clearTimeout(connectTimer);
-        clearTimeout(teardownTimer);
-        release();
-        if (outcome.status !== "connected") resolve(outcome);
-      };
-
       const settle = () => {
         if (done || !tornDown || !pendingOutcome) return;
-        finish(pendingOutcome);
+        done = true;
+        clearTimeout(teardownTimer);
+        release();
+        if (pendingOutcome.status !== "connected") resolve(pendingOutcome);
       };
 
       /** Stop this attempt: end the SDK session (unless it's already gone) and wait for confirmation. */
@@ -145,11 +140,6 @@ export function createSessionStarter({
 
       const connectTimer = setTimeout(() => shutDown({ status: "failed", message: TIMEOUT_MESSAGE }), timeoutMs);
       stopCurrent = () => shutDown({ status: "connected" });
-      forceCurrent = () => {
-        // Abandon this attempt: `done` makes every later callback from it a no-op.
-        tryEndSession();
-        finish(pendingOutcome?.status === "connected" ? pendingOutcome : { status: "failed", message: FORCE_ENDED_MESSAGE });
-      };
 
       try {
         startSession({
@@ -202,7 +192,9 @@ export function createSessionStarter({
       if (phase === "active") stopCurrent?.();
     },
     forceEnd() {
-      if (phase === "stuck") forceCurrent?.();
+      if (phase !== "stuck") return;
+      tryEndSession();
+      reload();
     },
   };
 }

@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CLOSED_MESSAGE,
   createSessionStarter,
-  FORCE_ENDED_MESSAGE,
   TIMEOUT_MESSAGE,
   type SessionStartOptions,
   type StarterPhase,
@@ -19,6 +18,7 @@ function harness(overrides: { getSignedUrl?: () => Promise<string>; endSession?:
     sessions.push(options);
   });
   const endSession = vi.fn(overrides.endSession ?? (() => {}));
+  const reload = vi.fn();
   const getSignedUrl = vi.fn(overrides.getSignedUrl ?? (async () => "wss://signed"));
   const starter = createSessionStarter({
     getSignedUrl,
@@ -26,9 +26,10 @@ function harness(overrides: { getSignedUrl?: () => Promise<string>; endSession?:
     endSession,
     timeoutMs: TIMEOUT,
     teardownTimeoutMs: TEARDOWN_TIMEOUT,
+    reload,
     onPhaseChange: (phase) => phases.push(phase),
   });
-  return { starter, sessions, phases, startSession, endSession, getSignedUrl };
+  return { starter, sessions, phases, startSession, endSession, getSignedUrl, reload };
 }
 
 /** Lets the awaited signed-url fetch settle so startSession has been called. */
@@ -291,46 +292,36 @@ describe("createSessionStarter", () => {
     it("forceEnd is ignored unless stuck", async () => {
       const h = await stopping();
       h.starter.forceEnd();
+      expect(h.reload).not.toHaveBeenCalled();
       expect(h.starter.phase()).toBe("stopping");
     });
 
-    it("force end: hard-ends the session, frees the lock, and a new session can start", async () => {
+    it("force end: best-effort endSession, then reloads the page without unlocking in place", async () => {
       const h = await stopping();
       await vi.advanceTimersByTimeAsync(TEARDOWN_TIMEOUT);
       const endsBefore = h.endSession.mock.calls.length;
 
       h.starter.forceEnd();
       expect(h.endSession).toHaveBeenCalledTimes(endsBefore + 1);
-      expect(h.starter.phase()).toBe("idle");
-
-      const retry = h.starter.start();
-      await flush();
-      expect(h.startSession).toHaveBeenCalledTimes(2);
-
-      // The abandoned attempt's late callbacks can't touch the new one.
-      h.sessions[0]?.onDisconnect();
-      h.sessions[0]?.onConnect();
-      expect(h.starter.phase()).toBe("starting");
-
-      h.sessions[1]?.onConnect();
-      await expect(retry).resolves.toEqual({ status: "connected" });
-      expect(h.starter.phase()).toBe("active");
+      expect(h.reload).toHaveBeenCalledTimes(1);
+      expect(h.endSession.mock.invocationCallOrder.at(-1)).toBeLessThan(h.reload.mock.invocationCallOrder[0] ?? 0);
+      expect(h.starter.phase()).toBe("stuck");
+      await expect(h.starter.start()).resolves.toEqual({ status: "busy" });
     });
 
-    it("force end still recovers when the hard teardown throws", async () => {
+    it("force end still reloads when endSession throws", async () => {
       const h = harness({
         endSession: () => {
           throw new Error("socket already gone");
         },
       });
-      const outcome = h.starter.start();
+      void h.starter.start();
       await flush();
       await vi.advanceTimersByTimeAsync(TIMEOUT + TEARDOWN_TIMEOUT);
       expect(h.starter.phase()).toBe("stuck");
 
       h.starter.forceEnd();
-      expect(h.starter.phase()).toBe("idle");
-      await expect(outcome).resolves.toEqual({ status: "failed", message: FORCE_ENDED_MESSAGE });
+      expect(h.reload).toHaveBeenCalledTimes(1);
     });
   });
 });
