@@ -2,27 +2,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CLOSED_MESSAGE,
   createSessionStarter,
+  FORCE_ENDED_MESSAGE,
   TIMEOUT_MESSAGE,
   type SessionStartOptions,
   type StarterPhase,
 } from "./session-starter";
 
 const TIMEOUT = 1000;
+const TEARDOWN_TIMEOUT = 2000;
 
 /** A controllable fake of the SDK: records each startSession call so tests can fire its callbacks. */
-function harness(overrides: { getSignedUrl?: () => Promise<string> } = {}) {
+function harness(overrides: { getSignedUrl?: () => Promise<string>; endSession?: () => void } = {}) {
   const sessions: SessionStartOptions[] = [];
   const phases: StarterPhase[] = [];
   const startSession = vi.fn((options: SessionStartOptions) => {
     sessions.push(options);
   });
-  const endSession = vi.fn();
+  const endSession = vi.fn(overrides.endSession ?? (() => {}));
   const getSignedUrl = vi.fn(overrides.getSignedUrl ?? (async () => "wss://signed"));
   const starter = createSessionStarter({
     getSignedUrl,
     startSession,
     endSession,
     timeoutMs: TIMEOUT,
+    teardownTimeoutMs: TEARDOWN_TIMEOUT,
     onPhaseChange: (phase) => phases.push(phase),
   });
   return { starter, sessions, phases, startSession, endSession, getSignedUrl };
@@ -114,8 +117,9 @@ describe("createSessionStarter", () => {
       expect(h.endSession).toHaveBeenCalledTimes(1);
       expect(h.starter.phase()).toBe("stopping");
 
-      await vi.advanceTimersByTimeAsync(60_000); // no time-based release
+      await vi.advanceTimersByTimeAsync(60_000); // no time-based release, only "stuck"
       expect(outcome.settled).toBe(false);
+      expect(h.starter.phase()).toBe("stuck");
       await expect(h.starter.start()).resolves.toEqual({ status: "busy" });
       expect(h.startSession).toHaveBeenCalledTimes(1);
 
@@ -237,6 +241,96 @@ describe("createSessionStarter", () => {
       await flush();
       h.sessions[0]?.onConnect();
       await expect(retry).resolves.toEqual({ status: "connected" });
+    });
+  });
+
+  describe("teardown watchdog", () => {
+    /** Starts, connects, then calls stop(); returns the harness mid-teardown. */
+    async function stopping() {
+      const h = harness();
+      const outcome = h.starter.start();
+      await flush();
+      h.sessions[0]?.onConnect();
+      await outcome;
+      h.starter.stop();
+      return h;
+    }
+
+    it("normal teardown: confirmation before the deadline frees the lock and never goes stuck", async () => {
+      const h = await stopping();
+      await vi.advanceTimersByTimeAsync(TEARDOWN_TIMEOUT - 1);
+      h.sessions[0]?.onDisconnect();
+      expect(h.starter.phase()).toBe("idle");
+
+      await vi.advanceTimersByTimeAsync(TEARDOWN_TIMEOUT * 5);
+      expect(h.phases).toEqual(["starting", "active", "stopping", "idle"]);
+    });
+
+    it("no confirmation by the deadline: goes stuck, stays locked, and does not auto-reset", async () => {
+      const h = await stopping();
+      await vi.advanceTimersByTimeAsync(TEARDOWN_TIMEOUT - 1);
+      expect(h.starter.phase()).toBe("stopping");
+      await expect(h.starter.start()).resolves.toEqual({ status: "busy" });
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.starter.phase()).toBe("stuck");
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.starter.phase()).toBe("stuck");
+      await expect(h.starter.start()).resolves.toEqual({ status: "busy" });
+      expect(h.startSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("a late confirmation while stuck still frees the lock normally", async () => {
+      const h = await stopping();
+      await vi.advanceTimersByTimeAsync(TEARDOWN_TIMEOUT);
+      h.sessions[0]?.onDisconnect();
+      expect(h.starter.phase()).toBe("idle");
+    });
+
+    it("forceEnd is ignored unless stuck", async () => {
+      const h = await stopping();
+      h.starter.forceEnd();
+      expect(h.starter.phase()).toBe("stopping");
+    });
+
+    it("force end: hard-ends the session, frees the lock, and a new session can start", async () => {
+      const h = await stopping();
+      await vi.advanceTimersByTimeAsync(TEARDOWN_TIMEOUT);
+      const endsBefore = h.endSession.mock.calls.length;
+
+      h.starter.forceEnd();
+      expect(h.endSession).toHaveBeenCalledTimes(endsBefore + 1);
+      expect(h.starter.phase()).toBe("idle");
+
+      const retry = h.starter.start();
+      await flush();
+      expect(h.startSession).toHaveBeenCalledTimes(2);
+
+      // The abandoned attempt's late callbacks can't touch the new one.
+      h.sessions[0]?.onDisconnect();
+      h.sessions[0]?.onConnect();
+      expect(h.starter.phase()).toBe("starting");
+
+      h.sessions[1]?.onConnect();
+      await expect(retry).resolves.toEqual({ status: "connected" });
+      expect(h.starter.phase()).toBe("active");
+    });
+
+    it("force end still recovers when the hard teardown throws", async () => {
+      const h = harness({
+        endSession: () => {
+          throw new Error("socket already gone");
+        },
+      });
+      const outcome = h.starter.start();
+      await flush();
+      await vi.advanceTimersByTimeAsync(TIMEOUT + TEARDOWN_TIMEOUT);
+      expect(h.starter.phase()).toBe("stuck");
+
+      h.starter.forceEnd();
+      expect(h.starter.phase()).toBe("idle");
+      await expect(outcome).resolves.toEqual({ status: "failed", message: FORCE_ENDED_MESSAGE });
     });
   });
 });
