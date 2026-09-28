@@ -4,9 +4,21 @@ import { CLIENT_KEY, clientHeaders, jsonRequest, uniqueIp } from "../../route-he
 
 const query = vi.fn();
 const create = vi.fn();
+const retrieve = vi.fn();
 vi.mock("@/lib/notion-client", () => ({
-  createNotionClient: () => ({ dataSources: { query }, pages: { create } }),
+  createNotionClient: () => ({ dataSources: { query, retrieve }, pages: { create } }),
 }));
+
+const SCHEMA = {
+  properties: {
+    Name: { type: "title" },
+    Sets: { type: "number" },
+    Reps: { type: "number" },
+    "Muscle Group": { type: "select" },
+    "Split ID": { type: "rich_text" },
+    "Exercise ID": { type: "rich_text" },
+  },
+};
 
 const { POST } = await import("./route");
 
@@ -25,6 +37,7 @@ describe("POST /api/split/save", () => {
     vi.stubEnv("NOTION_DATA_SOURCE_ID", "ds-1");
     vi.stubEnv("NEXT_PUBLIC_CLIENT_API_KEY", CLIENT_KEY);
     query.mockReset().mockResolvedValue({ results: [] });
+    retrieve.mockReset().mockResolvedValue(SCHEMA);
     create.mockReset().mockImplementation(async () => ({ id: `page-${create.mock.calls.length}` }));
   });
 
@@ -40,7 +53,10 @@ describe("POST /api/split/save", () => {
 
   it("returns existing rows on retry instead of duplicating", async () => {
     query.mockResolvedValue({
-      results: split().exercises.map((e, i) => ({ id: `old-${i}`, properties: { Name: { title: [{ plain_text: e.name }] } } })),
+      results: split().exercises.map((e, i) => ({
+        id: `old-${i}`,
+        properties: { "Exercise ID": { type: "rich_text", rich_text: [{ plain_text: e.id }] } },
+      })),
     });
     const res = await POST(jsonRequest("/api/split/save", { split: split() }, clientHeaders()));
     expect(await res.json()).toEqual({
@@ -58,9 +74,21 @@ describe("POST /api/split/save", () => {
     expect(query).not.toHaveBeenCalled();
   });
 
+  it("500s with the exact problem when the Notion database is missing a column", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const properties = Object.fromEntries(Object.entries(SCHEMA.properties).filter(([name]) => name !== "Exercise ID"));
+    retrieve.mockResolvedValue({ properties });
+    const res = await POST(jsonRequest("/api/split/save", { split: split() }, clientHeaders()));
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error: string; issues: string[] };
+    expect(body.error).toBe("notion_schema_mismatch");
+    expect(body.issues.join()).toMatch(/Exercise ID/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("502s when Notion fails", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    query.mockRejectedValue(new Error("boom"));
+    retrieve.mockRejectedValue(new Error("boom"));
     const res = await POST(jsonRequest("/api/split/save", { split: split() }, clientHeaders()));
     expect(res.status).toBe(502);
   });
