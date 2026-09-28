@@ -81,7 +81,9 @@ This is an MVP. What the safeguards do, and what they don't:
   anyone who loads the page can read it. It only stops drive-by and cross-site callers. There are no
   user accounts; production needs real user auth (sessions or tokens per user) on the browser routes.
 - **Rate limits are in memory and per instance.** `signed-url` allows 5 and `save` 10 requests per
-  minute per client IP, tracked in a bounded map (10k clients) inside each server process. Limits reset
+  minute per client IP, tracked in a bounded map (10k clients) inside each server process. Only
+  requests with a valid key are counted, so bad-key traffic (rejected with 401) can't use up a
+  legitimate user's quota. Limits reset
   on restart and are not shared across instances or serverless invocations. Production needs a
   distributed limiter (e.g. Redis) at the edge.
 - **Client IP.** Taken from the host's trusted header (`TRUSTED_IP_HEADER`, or `x-vercel-forwarded-for`

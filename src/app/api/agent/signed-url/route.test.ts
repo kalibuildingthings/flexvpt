@@ -39,6 +39,27 @@ describe("GET /api/agent/signed-url", () => {
     expect(blocked.headers.get("retry-after")).toMatch(/^\d+$/);
   });
 
+  it("requests with a bad key are rejected without using up that IP's quota", async () => {
+    const ip = uniqueIp();
+    for (let i = 0; i < 20; i++) {
+      const res = await GET(getRequest(URL_PATH, clientHeaders(ip, "wrong-key-0123456789")));
+      expect(res.status).toBe(401);
+    }
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) statuses.push((await GET(getRequest(URL_PATH, clientHeaders(ip)))).status);
+    expect(statuses).toEqual([200, 200, 200, 200, 200, 429]);
+  });
+
+  it("checks configuration before charging the limiter", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const ip = uniqueIp();
+    vi.stubEnv("NEXT_PUBLIC_CLIENT_API_KEY", "");
+    for (let i = 0; i < 10; i++) expect((await GET(getRequest(URL_PATH, clientHeaders(ip)))).status).toBe(500);
+
+    vi.stubEnv("NEXT_PUBLIC_CLIENT_API_KEY", CLIENT_KEY);
+    expect((await GET(getRequest(URL_PATH, clientHeaders(ip)))).status).toBe(200);
+  });
+
   describe("controlled failures", () => {
     beforeEach(() => vi.spyOn(console, "error").mockImplementation(() => {}));
 

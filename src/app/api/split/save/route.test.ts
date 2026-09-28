@@ -99,6 +99,16 @@ describe("POST /api/split/save", () => {
     expect(query).not.toHaveBeenCalled();
   });
 
+  it("bad-key saves don't use up the IP's quota", async () => {
+    const ip = uniqueIp();
+    for (let i = 0; i < 15; i++) {
+      const res = await POST(jsonRequest("/api/split/save", { split: split() }, clientHeaders(ip, "wrong-key-0123456789")));
+      expect(res.status).toBe(401);
+    }
+    const res = await POST(jsonRequest("/api/split/save", { split: split() }, clientHeaders(ip)));
+    expect(res.status).toBe(200);
+  });
+
   it("429s after too many saves from one IP", async () => {
     const ip = uniqueIp();
     const statuses: number[] = [];
