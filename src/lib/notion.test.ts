@@ -46,8 +46,11 @@ function fakeNotion(
     failCreateOnCall?: number;
     pageSize?: number;
     pageShape?: (row: Row) => unknown;
+    /** Yield to the event loop inside each call so concurrent saves interleave. */
+    latency?: boolean;
   } = {},
 ) {
+  const tick = () => (opts.latency ? new Promise((resolve) => setTimeout(resolve, 1)) : Promise.resolve());
   const rows = opts.rows ?? [];
   const pageSize = opts.pageSize ?? 100;
   const calls = { retrieve: 0, query: 0, create: 0 };
@@ -60,6 +63,7 @@ function fakeNotion(
       },
       async query(args) {
         calls.query += 1;
+        await tick();
         const filter = args.filter as { rich_text: { equals: string } };
         const matching = rows.filter((row) => row.splitId === filter.rich_text.equals);
         const start = Number(args.start_cursor ?? 0);
@@ -74,6 +78,7 @@ function fakeNotion(
     pages: {
       async create(args) {
         calls.create += 1;
+        await tick();
         if (calls.create === opts.failCreateOnCall) throw new Error("Notion 503");
         const props = args.properties as Record<string, { title?: Array<{ text: { content: string } }>; rich_text?: Array<{ text: { content: string } }> }>;
         const row: Row = {
@@ -179,6 +184,47 @@ describe("saveSplitToNotion", () => {
 
     expect(result.alreadySaved).toBe(true);
     expect(notion.calls.query).toBe(2);
+  });
+
+  it("serializes concurrent saves of the same split, so they cannot both create rows", async () => {
+    const split = validSplit();
+    const notion = fakeNotion({ latency: true });
+
+    const [a, b] = await Promise.all([
+      saveSplitToNotion(notion.client, "ds-1", split),
+      saveSplitToNotion(notion.client, "ds-1", split),
+    ]);
+
+    expect(notion.rows).toHaveLength(6);
+    expect([a.createdCount, b.createdCount].sort()).toEqual([0, 6]);
+    expect(a.notionPageIds).toEqual(b.notionPageIds);
+  });
+
+  it("does not block saves of different splits on each other", async () => {
+    const split = validSplit();
+    const other = buildSplit({
+      primary: "legs",
+      secondary: "shoulders",
+      exerciseIds: ["back-squat", "bulgarian-split-squat", "lateral-raise", "rear-delt-fly", "face-pull", "upright-row"],
+    });
+    if (!other.ok) throw new Error("fixture invalid");
+    const notion = fakeNotion({ latency: true });
+
+    await Promise.all([
+      saveSplitToNotion(notion.client, "ds-1", split),
+      saveSplitToNotion(notion.client, "ds-1", other.split),
+    ]);
+
+    expect(notion.rows).toHaveLength(12);
+  });
+
+  it("releases the lock after a failed save so the retry can run", async () => {
+    const split = validSplit();
+    const notion = fakeNotion({ latency: true, failCreateOnCall: 2 });
+
+    await expect(saveSplitToNotion(notion.client, "ds-1", split)).rejects.toThrow("Notion 503");
+    await expect(saveSplitToNotion(notion.client, "ds-1", split)).resolves.toMatchObject({ createdCount: 5 });
+    expect(notion.rows).toHaveLength(6);
   });
 
   describe("incompatible database or malformed responses fail clearly", () => {
