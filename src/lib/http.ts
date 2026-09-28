@@ -79,10 +79,22 @@ type GuardOptions = {
 };
 
 /**
- * Rate limit (per IP), then require a shared-secret header whose value comes from env.
+ * Order matters: (1) server configuration, (2) the shared-secret header, (3) the per-IP limiter.
+ * Only authenticated requests are charged against the limiter, so requests with a bad or missing
+ * key can't exhaust an IP's quota and lock out legitimate users. Bad-key requests are cheap
+ * (no upstream calls), so they are rejected with 401 without being counted.
  * Returns an error response to send, or null when the request may proceed.
  */
 export function guardRequest(request: Request, { header, secretEnv, limiter }: GuardOptions): Response | null {
+  let expected: string;
+  try {
+    expected = getEnv(secretEnv);
+  } catch (error) {
+    console.error(error);
+    return errorResponse(500, "server_misconfigured");
+  }
+  if (!secretMatches(request.headers.get(header), expected)) return errorResponse(401, "unauthorized");
+
   if (limiter) {
     const limited = limiter.check(clientIp(request));
     if (!limited.ok) {
@@ -92,15 +104,7 @@ export function guardRequest(request: Request, { header, secretEnv, limiter }: G
       );
     }
   }
-
-  let expected: string;
-  try {
-    expected = getEnv(secretEnv);
-  } catch (error) {
-    console.error(error);
-    return errorResponse(500, "server_misconfigured");
-  }
-  return secretMatches(request.headers.get(header), expected) ? null : errorResponse(401, "unauthorized");
+  return null;
 }
 
 /** Agent webhooks carry a shared secret header configured on the ElevenLabs tool. */
