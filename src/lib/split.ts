@@ -9,22 +9,13 @@ export type BuildSplitInput = {
 
 export type BuildSplitResult = { ok: true; split: Split } | { ok: false; issues: string[] };
 
-const FNV_OFFSET = BigInt("0xcbf29ce484222325");
-const FNV_PRIME = BigInt("0x100000001b3");
-const MASK_64 = BigInt("0xffffffffffffffff");
-
-/** FNV-1a 64-bit. Synchronous and isomorphic, since the browser also builds splits (show_split). */
-function fnv1a64(input: string): string {
-  let hash = FNV_OFFSET;
-  for (const byte of new TextEncoder().encode(input)) {
-    hash = ((hash ^ BigInt(byte)) * FNV_PRIME) & MASK_64;
-  }
-  return hash.toString(16).padStart(16, "0");
-}
-
-/** Deterministic id: a hash of the sorted exercise ids, so the same picks always map to the same Notion rows. */
+/**
+ * Deterministic, human-readable id: the exercise ids sorted and joined with "+", so the same picks
+ * always map to the same Notion rows. Ids are [a-z0-9-], so "+" can't collide. No hashing needed:
+ * six ids stay well under Notion's 2,000-character text limit.
+ */
 export function splitIdFor(exerciseIds: readonly string[]): string {
-  return `split_${fnv1a64([...exerciseIds].sort().join(","))}`;
+  return [...exerciseIds].sort().join("+");
 }
 
 function capitalize(value: string): string {
