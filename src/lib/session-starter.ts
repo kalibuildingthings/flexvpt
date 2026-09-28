@@ -3,26 +3,29 @@ export type SessionStartOptions = {
   connectionType: "websocket";
   onConnect: () => void;
   onError: (message: string) => void;
+  /** Fired when a connected session ends. */
   onDisconnect: () => void;
+  /** A start that fails reports `{ status: "disconnected" }` here instead of onDisconnect. */
+  onStatusChange: (event: { status: string }) => void;
 };
 
 export type StartOutcome = { status: "connected" } | { status: "busy" } | { status: "failed"; message: string };
 
 /**
- * idle → starting → active → idle (on disconnect or stop)
- *            └─ timeout → draining → idle (once the cancelled session reports back, or after drainMs)
+ * idle → starting → active → stopping → idle
+ *            └─ timeout / error ─┘
+ * "stopping" lasts until the SDK confirms the session is gone; no timer releases it.
  */
-export type StarterPhase = "idle" | "starting" | "draining" | "active";
+export type StarterPhase = "idle" | "starting" | "active" | "stopping";
 
 type Deps = {
   getSignedUrl: () => Promise<string>;
-  /** The SDK's startSession returns void; progress arrives via onConnect / onError / onDisconnect. */
+  /** The SDK's startSession returns void; progress arrives via the callbacks in SessionStartOptions. */
   startSession: (options: SessionStartOptions) => void;
   /** Ends the active or pending SDK session. */
   endSession: () => void;
   timeoutMs?: number;
-  /** Upper bound on waiting for a timed-out session to report its teardown before allowing a retry. */
-  drainMs?: number;
+  onPhaseChange?: (phase: StarterPhase) => void;
 };
 
 export type SessionStarter = {
@@ -32,91 +35,109 @@ export type SessionStarter = {
 };
 
 export const TIMEOUT_MESSAGE = "Timed out connecting to the trainer";
+export const CLOSED_MESSAGE = "Connection closed before the trainer was ready";
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 /**
- * Owns the lifecycle of at most one voice session. The lock is taken synchronously, so rapid
- * clicks can't mint a second signed url or open a second session. Each attempt only acts on its
- * own callbacks while it still owns the lock; a timed-out attempt is ended and drained before
- * another attempt may start, and a session that connects after being abandoned is ended.
+ * Owns the lifecycle of at most one voice session.
+ *
+ * The lock is taken synchronously, so rapid clicks can't mint a second signed url or open a second
+ * session. It is released only once the SDK confirms the current session is torn down (onDisconnect,
+ * or status "disconnected" for a failed start). After a timeout, error or stop(), the session is
+ * ended and the starter stays "stopping" until that confirmation arrives, so a retry can never
+ * overlap a session that may still connect. If the SDK never confirms, only a page reload clears it.
  */
-export function createSessionStarter({
-  getSignedUrl,
-  startSession,
-  endSession,
-  timeoutMs = 15_000,
-  drainMs = 3_000,
-}: Deps): SessionStarter {
+export function createSessionStarter({ getSignedUrl, startSession, endSession, timeoutMs = 15_000, onPhaseChange }: Deps): SessionStarter {
   let phase: StarterPhase = "idle";
-  let owner = 0; // id of the attempt holding the lock; 0 = nobody
-  let nextId = 0;
+  /** Ends the attempt that holds the lock, if any. */
+  let stopCurrent: (() => void) | undefined;
 
-  function release(id: number) {
-    if (owner !== id) return;
-    owner = 0;
-    phase = "idle";
+  function setPhase(next: StarterPhase) {
+    if (phase === next) return;
+    phase = next;
+    onPhaseChange?.(next);
   }
 
-  function runAttempt(id: number, signedUrl: string): Promise<StartOutcome> {
+  function release() {
+    stopCurrent = undefined;
+    setPhase("idle");
+  }
+
+  function runAttempt(signedUrl: string): Promise<StartOutcome> {
     return new Promise<StartOutcome>((resolve) => {
-      let state: "pending" | "connected" | "timedOut" | "done" = "pending";
-      let drainTimer: ReturnType<typeof setTimeout> | undefined;
+      let connected = false;
+      let tornDown = false;
+      /** Set once we've given up on (or ended) this attempt; resolved when teardown is confirmed. */
+      let pendingOutcome: StartOutcome | undefined;
+      let done = false;
 
-      const fail = (message: string) => {
-        if (state !== "pending") return;
-        state = "done";
+      const settle = () => {
+        if (done || !tornDown || !pendingOutcome) return;
+        done = true;
+        release();
+        if (pendingOutcome.status !== "connected") resolve(pendingOutcome);
+      };
+
+      /** Stop this attempt: end the SDK session (unless it's already gone) and wait for confirmation. */
+      const shutDown = (outcome: StartOutcome) => {
+        if (pendingOutcome) return;
+        pendingOutcome = outcome;
         clearTimeout(connectTimer);
-        release(id);
-        resolve({ status: "failed", message });
+        if (!tornDown) {
+          setPhase("stopping");
+          endSession();
+        }
+        settle();
       };
 
-      const finishDrain = () => {
-        if (state !== "timedOut") return;
-        state = "done";
-        clearTimeout(drainTimer);
-        release(id);
-        resolve({ status: "failed", message: TIMEOUT_MESSAGE });
+      const onTornDown = () => {
+        if (tornDown) return;
+        tornDown = true;
+        if (connected && !pendingOutcome) {
+          // A live session that ended on its own (agent hung up, network drop).
+          pendingOutcome = { status: "connected" };
+        } else if (!pendingOutcome) {
+          // A start that closed before connecting. The SDK normally follows with onError carrying
+          // the reason; give it one tick, then fail with a generic message.
+          setTimeout(() => shutDown({ status: "failed", message: CLOSED_MESSAGE }), 0);
+        }
+        settle();
       };
 
-      const connectTimer = setTimeout(() => {
-        if (state !== "pending") return;
-        state = "timedOut";
-        phase = "draining";
-        endSession();
-        drainTimer = setTimeout(finishDrain, drainMs);
-      }, timeoutMs);
+      const connectTimer = setTimeout(() => shutDown({ status: "failed", message: TIMEOUT_MESSAGE }), timeoutMs);
+      stopCurrent = () => shutDown({ status: "connected" });
 
       try {
         startSession({
           signedUrl,
           connectionType: "websocket",
           onConnect: () => {
-            if (state === "pending") {
-              state = "connected";
-              clearTimeout(connectTimer);
-              phase = "active";
-              resolve({ status: "connected" });
-            } else if (state === "timedOut" || (state === "done" && owner === 0)) {
-              // Connected after we gave up on it: end it rather than leave an orphan session.
-              // If a newer attempt owns the lock, leave it alone; the SDK is already ending this one.
+            if (done || tornDown) return;
+            if (pendingOutcome) {
+              // Connected after we gave up on it: it still holds the lock, so end it again.
               endSession();
+              return;
             }
+            connected = true;
+            clearTimeout(connectTimer);
+            setPhase("active");
+            resolve({ status: "connected" });
           },
-          onError: (message) => fail(message),
-          onDisconnect: () => {
-            if (state === "pending") fail("Connection closed before the trainer was ready");
-            else if (state === "timedOut") finishDrain();
-            else if (state === "connected") {
-              state = "done";
-              release(id);
-            }
+          onError: (message) => {
+            if (!done && !connected) shutDown({ status: "failed", message });
+          },
+          onDisconnect: onTornDown,
+          onStatusChange: ({ status }) => {
+            if (status === "disconnected") onTornDown();
           },
         });
       } catch (error) {
-        fail(messageOf(error));
+        // Nothing was started, so there is nothing to tear down.
+        tornDown = true;
+        shutDown({ status: "failed", message: messageOf(error) });
       }
     });
   }
@@ -125,22 +146,19 @@ export function createSessionStarter({
     phase: () => phase,
     async start() {
       if (phase !== "idle") return { status: "busy" };
-      const id = ++nextId;
-      owner = id;
-      phase = "starting";
+      setPhase("starting");
 
       let signedUrl: string;
       try {
         signedUrl = await getSignedUrl();
       } catch (error) {
-        release(id);
+        release();
         return { status: "failed", message: messageOf(error) };
       }
-      return runAttempt(id, signedUrl);
+      return runAttempt(signedUrl);
     },
     stop() {
-      endSession();
-      if (phase === "active") release(owner);
+      if (phase === "active") stopCurrent?.();
     },
   };
 }
