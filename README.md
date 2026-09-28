@@ -29,8 +29,13 @@ If there are no mp3s, the **Form cues** button falls back to browser speech.
 | Reps         | Number |
 | Muscle Group | Select |
 | Split ID     | Text   |
+| Exercise ID  | Text   |
 
-`Split ID` makes saves idempotent. Saving the same split twice returns the existing rows.
+Rows are keyed by (`Split ID`, `Exercise ID`). The split id is the sorted exercise ids joined with `+`
+(e.g. `back-squat+face-pull+…`). Saving a split creates only the rows that are missing, so saving twice
+adds nothing and a retry after a partial failure fills the gaps. Each save first checks the columns
+above; if one is missing or has the wrong type it fails with `500 notion_schema_mismatch` naming the
+column, and writes nothing.
 
 **ElevenLabs agent.** Create an agent with the prompt in `agent/system-prompt.md` and the tools in
 `agent/tools.json`. Replace `YOUR_HOST` with the app's public URL (e.g. an ngrok tunnel in dev),
@@ -43,23 +48,52 @@ browser has to use a signed URL.
 voice ─▶ ElevenLabs agent ──webhook──▶ POST /api/tools/exercises   get_exercises
                           ──webhook──▶ POST /api/tools/split       build_split (422 + issues → agent repicks)
                           ──client───▶ show_split (browser)       renders cards
-user clicks "Save to Notion" ─────────▶ POST /api/split/save        one row per exercise, deduped by split id
+user clicks "Save to Notion" ─────────▶ POST /api/split/save        one row per exercise, deduped by (split id, exercise id)
 ```
 
-| Endpoint | Caller | Body | Response |
-| --- | --- | --- | --- |
-| `POST /api/tools/exercises` | agent | `{ muscleGroup, kind? }` | `{ exercises: [{ id, name, kind, muscleGroup }] }` |
-| `POST /api/tools/split` | agent | `{ primary, secondary, exerciseIds[] }` | `{ split }` or `422 { error: "rule_violation", issues[] }` |
-| `POST /api/split/save` | browser | `{ split }` | `{ notionPageIds[], alreadySaved }` |
-| `GET /api/agent/signed-url` | browser | – | `{ signedUrl }` |
+| Endpoint | Caller | Auth header | Body | Success |
+| --- | --- | --- | --- | --- |
+| `POST /api/tools/exercises` | agent | `x-flexvpt-secret` | `{ muscleGroup, kind? }` | `{ exercises: [{ id, name, kind, muscleGroup }] }` |
+| `POST /api/tools/split` | agent | `x-flexvpt-secret` | `{ primary, secondary, exerciseIds[6] }` | `{ split }` |
+| `POST /api/split/save` | browser | `x-flexvpt-client-key` | `{ split }` | `{ notionPageIds[], alreadySaved, createdCount }` |
+| `GET /api/agent/signed-url` | browser | `x-flexvpt-client-key` | – | `{ signedUrl }` |
 
-Agent webhooks require the `x-flexvpt-secret` header. The browser routes (`signed-url`, `split/save`)
-require `x-flexvpt-client-key` and are rate limited per IP (5 and 10 requests/minute, in memory).
+Every error is `{ error, issues[] }`:
 
-**Client key.** `NEXT_PUBLIC_CLIENT_API_KEY` is shipped to the browser, so anyone who loads the page can
-read it. It stops drive-by and cross-site callers; it is not user authentication (the MVP has no accounts). All bodies are validated with Zod, and a bad body gets a
-`400 { error, issues[] }`. The save route rebuilds the split from its exercise ids on the server, so a
-tampered client payload can't write invalid rows.
+| Status | `error` | When |
+| --- | --- | --- |
+| 400 | `invalid_json`, `invalid_request` | Unparseable body, or fails validation (unknown `kind`, malformed id, not exactly 6 ids) |
+| 401 | `unauthorized` | Missing or wrong secret / client key |
+| 413 | `payload_too_large` | Body over 16 KiB |
+| 422 | `rule_violation` | Six valid ids that break the 2 + 4 rule (issues say what to repick) |
+| 429 | `rate_limited` | Over the per-IP limit (`Retry-After` header set) |
+| 500 | `server_misconfigured`, `notion_schema_mismatch` | Missing env var; Notion columns missing or wrong type |
+| 502 / 504 | `upstream_*`, `notion_save_failed` | ElevenLabs or Notion failed / timed out |
+
+The save route rebuilds the split from its exercise ids on the server, so a tampered client payload
+can't write invalid rows.
+
+## Security and production limits
+
+This is an MVP. What the safeguards do, and what they don't:
+
+- **The client key is not authentication.** `NEXT_PUBLIC_CLIENT_API_KEY` ships in the page bundle, so
+  anyone who loads the page can read it. It only stops drive-by and cross-site callers. There are no
+  user accounts; production needs real user auth (sessions or tokens per user) on the browser routes.
+- **Rate limits are in memory and per instance.** `signed-url` allows 5 and `save` 10 requests per
+  minute per client IP, tracked in a bounded map (10k clients) inside each server process. Limits reset
+  on restart and are not shared across instances or serverless invocations. Production needs a
+  distributed limiter (e.g. Redis) at the edge.
+- **Client IP.** Taken from the host's trusted header (`TRUSTED_IP_HEADER`, or `x-vercel-forwarded-for`
+  on Vercel); otherwise the rightmost `x-forwarded-for` entry, i.e. the address our proxy (ngrok)
+  appended. Earlier, client-supplied entries and `x-real-ip` are ignored. Behind more than one proxy,
+  set `TRUSTED_IP_HEADER`.
+- **Notion writes are not transactional.** Six rows are created one by one; a failure part-way leaves a
+  partial split, which the next save completes. Saves of the same split are serialized within one
+  server process, but two instances saving at the same moment can still both create rows, and Notion's
+  query results can lag a fresh write. Notion has no unique constraints, so this can't be fully closed
+  here. Production should store splits in a real database with a unique `(split_id, exercise_id)`
+  constraint, and sync to Notion from there if needed.
 
 ## Layout
 
