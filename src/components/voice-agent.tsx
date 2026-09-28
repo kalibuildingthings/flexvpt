@@ -63,7 +63,7 @@ function VoiceControls({ onSplit }: VoiceAgentProps) {
         <div role="alert" className="flex flex-col items-center gap-2 text-sm text-destructive">
           <p>Session is taking too long to end</p>
           <Button variant="destructive" size="sm" onClick={() => starter.forceEnd()}>
-            Force end
+            Force end and reload
           </Button>
         </div>
       )}
