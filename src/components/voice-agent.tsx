@@ -46,18 +46,27 @@ function VoiceControls({ onSplit }: VoiceAgentProps) {
   }
 
   const live = status === "connected";
-  const busy = phase === "starting" || phase === "stopping" || status === "connecting";
+  const stuck = phase === "stuck";
+  const busy = phase === "starting" || phase === "stopping" || stuck || status === "connecting";
   const error = startError ?? toolError ?? (status === "error" ? (message ?? "Connection error") : null);
 
   return (
     <div className="flex flex-col items-center gap-3">
       <Button size="lg" onClick={live ? () => starter.stop() : start} disabled={busy}>
         {busy ? <Loader2 className="animate-spin" /> : live ? <MicOff /> : <Mic />}
-        {phase === "stopping" ? "Ending session…" : live ? "End session" : "Talk to your trainer"}
+        {phase === "stopping" || stuck ? "Ending session…" : live ? "End session" : "Talk to your trainer"}
       </Button>
       <p className="text-sm text-muted-foreground">
         {live ? 'Listening. Try "legs and shoulders".' : `Status: ${status}`}
       </p>
+      {stuck && (
+        <div role="alert" className="flex flex-col items-center gap-2 text-sm text-destructive">
+          <p>Session is taking too long to end</p>
+          <Button variant="destructive" size="sm" onClick={() => starter.forceEnd()}>
+            Force end
+          </Button>
+        </div>
+      )}
       {error && (
         <p role="alert" className="text-sm text-destructive">
           {error}
