@@ -1,12 +1,16 @@
 import { SaveSplitRequestSchema, type SaveSplitResponse } from "@/lib/api-schemas";
+import { guardSaveRequest } from "@/lib/client-route-limits";
 import { getEnv } from "@/lib/env";
 import { errorResponse, parseJsonBody } from "@/lib/http";
 import { createNotionClient } from "@/lib/notion-client";
-import { saveSplitToNotion } from "@/lib/notion";
+import { NotionSchemaError, saveSplitToNotion } from "@/lib/notion";
 import { buildSplit } from "@/lib/split";
 
 /** Browser "Save to Notion" button. Re-derives the split server-side so only rule-valid data is written. */
 export async function POST(request: Request): Promise<Response> {
+  const denied = guardSaveRequest(request);
+  if (denied) return denied;
+
   const parsed = await parseJsonBody(request, SaveSplitRequestSchema);
   if (!parsed.ok) return parsed.response;
 
@@ -19,6 +23,7 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json(saved satisfies SaveSplitResponse);
   } catch (error) {
     console.error("Notion save failed", error);
+    if (error instanceof NotionSchemaError) return errorResponse(500, "notion_schema_mismatch", [error.message]);
     return errorResponse(502, "notion_save_failed");
   }
 }

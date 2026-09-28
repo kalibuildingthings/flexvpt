@@ -9,9 +9,13 @@ export type BuildSplitInput = {
 
 export type BuildSplitResult = { ok: true; split: Split } | { ok: false; issues: string[] };
 
-/** Deterministic id: the same picks always produce the same split id (used to dedupe Notion saves). */
-export function splitIdFor(primary: MuscleGroup, secondary: MuscleGroup, exerciseIds: readonly string[]): string {
-  return `${primary}+${secondary}:${[...exerciseIds].sort().join(",")}`;
+/**
+ * Deterministic, human-readable id: the exercise ids sorted and joined with "+", so the same picks
+ * always map to the same Notion rows. Ids are [a-z0-9-], so "+" can't collide. No hashing needed:
+ * six ids stay well under Notion's 2,000-character text limit.
+ */
+export function splitIdFor(exerciseIds: readonly string[]): string {
+  return [...exerciseIds].sort().join("+");
 }
 
 function capitalize(value: string): string {
@@ -74,7 +78,7 @@ export function buildSplit({ primary, secondary, exerciseIds }: BuildSplitInput)
   return {
     ok: true,
     split: {
-      id: splitIdFor(primary, secondary, exerciseIds),
+      id: splitIdFor(exerciseIds),
       title: `${capitalize(primary)} & ${capitalize(secondary)}`,
       primary,
       secondary,

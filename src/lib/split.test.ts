@@ -22,8 +22,16 @@ describe("buildSplit", () => {
     ]);
   });
 
-  it("gives the same id regardless of pick order", () => {
-    expect(splitIdFor("legs", "shoulders", ["b", "a"])).toBe(splitIdFor("legs", "shoulders", ["a", "b"]));
+  it("derives a readable split id from the canonical (sorted) exercise ids", () => {
+    expect(splitIdFor(["face-pull", "back-squat"])).toBe("back-squat+face-pull");
+    expect(splitIdFor(["back-squat", "face-pull"])).toBe("back-squat+face-pull");
+    expect(splitIdFor(["back-squat", "front-raise"])).not.toBe(splitIdFor(["back-squat", "face-pull"]));
+  });
+
+  it("puts that id on the built split", () => {
+    const result = buildSplit(VALID);
+    if (!result.ok) throw new Error("fixture invalid");
+    expect(result.split.id).toBe("back-squat+face-pull+front-raise+lateral-raise+rear-delt-fly+romanian-deadlift");
   });
 
   it("reports wrong counts so the agent can repick", () => {

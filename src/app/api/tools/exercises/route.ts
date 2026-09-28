@@ -1,10 +1,11 @@
 import { GetExercisesRequestSchema } from "@/lib/api-schemas";
 import { listExercises } from "@/lib/exercises";
-import { errorResponse, isAuthorizedTool, parseJsonBody } from "@/lib/http";
+import { guardToolRequest, parseJsonBody } from "@/lib/http";
 
 /** Agent webhook `get_exercises`: the candidate exercises for one muscle group. */
 export async function POST(request: Request): Promise<Response> {
-  if (!isAuthorizedTool(request)) return errorResponse(401, "unauthorized");
+  const denied = guardToolRequest(request);
+  if (denied) return denied;
 
   const parsed = await parseJsonBody(request, GetExercisesRequestSchema);
   if (!parsed.ok) return parsed.response;
