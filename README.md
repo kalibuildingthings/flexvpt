@@ -40,7 +40,8 @@ column, and writes nothing.
 **ElevenLabs agent.** Create an agent with the prompt in `agent/system-prompt.md` and the tools in
 `agent/tools.json`. Replace `YOUR_HOST` with the app's public URL (e.g. an ngrok tunnel in dev),
 and set the `x-flexvpt-secret` header to `TOOL_WEBHOOK_SECRET`. Enable authentication so the
-browser has to use a signed URL.
+browser has to use a signed URL. Set the agent's LLM to GPT 5.6 Luna; the previous model produced
+stray words during tool calls.
 
 ## How it works
 
